@@ -1,57 +1,87 @@
-Create kubernets cluster using eksctl
+﻿# EKS Monitoring with Prometheus + Grafana (Terraform + Helm)
 
-eksctl create cluster --name EKS-Cluster --region ap-south-2 --nodegroup-name eks-worker-nodes --node-type t3.medium --managed --nodes 2 
+Provisions an AWS EKS cluster and walks through installing the kube-prometheus-stack Helm chart (Prometheus, Alertmanager, Grafana, node-exporter, kube-state-metrics) for full cluster observability.
 
-Update kubeconfig to connect kubernetes cluster
+---
+
+## What gets created
+
+| Resource | File |
+|---|---|
+| VPC + subnets + IGW + NAT | `vpc.tf`, `subnet.tf`, `igw.tf`, `nat.tf`, `route-table.tf` |
+| EKS control plane | `eks.tf` |
+| Managed worker node group | `worker-node.tf`, `launch-template.tf` |
+| IAM roles + policies | `iam.tf` |
+| Security groups | `sg.tf` |
+| Sample workload to monitor | `deployment.yaml` |
+
+The `kube-prometheus-stack` chart is installed manually after the cluster is up (commands in this README).
+
+---
+
+## Prerequisites
+
+1. AWS Administrator credential.
+2. EC2 key pair.
+3. Terraform >= 1.5, kubectl, helm.
+
+---
+
+## Deploy
+
+### 1. Stand up the cluster
+
+```bash
+terraform init
+terraform apply -auto-approve
 
 aws eks update-kubeconfig --region ap-south-2 --name EKS-Cluster
+kubectl get nodes
+```
 
-Run terraform apply -auto-approve to create EKS cluster
+(Or stand it up faster with `eksctl`:)
 
-Add the Helm Stable Charts forlocal client.
-helm repo add stable https://charts.helm.sh/stable
+```bash
+eksctl create cluster \
+  --name EKS-Cluster \
+  --region ap-south-2 \
+  --nodegroup-name eks-worker-nodes \
+  --node-type t3.medium \
+  --managed --nodes 2
+```
 
-Add prometheus Helm repo
+### 2. Install kube-prometheus-stack
+
+```bash
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-
-Create monitoring namespace
+helm repo update
 kubectl create namespace monitoring
 
-Install prometheus and grafana
-helm install stable prometheus-community/kube-prometheus-stack -n monitoring
+helm install monitoring prometheus-community/kube-prometheus-stack \
+  --namespace monitoring \
+  --set prometheus.service.type=LoadBalancer \
+  --set grafana.service.type=LoadBalancer \
+  --set alertmanager.service.type=LoadBalancer
+```
 
-Lets check if prometheus and grafana pods are running already
-kubectl get pods -n monitoring
+### 3. Get URLs
+
+```bash
 kubectl get svc -n monitoring
+```
 
-Edit both service to change to LoadBalancer from ClusterIP to get available outside of the cluster
-kubectl edit svc stable-kube-prometheus-sta-prometheus -n monitoring
-kubectl edit svc stable-grafana -n monitoring
+Open Grafana on the printed external LoadBalancer hostname. Default credentials: `admin / prom-operator`.
 
-Verify if service is changed to LoadBalancer and also to get the Load Balancer URL.
-kubectl get svc -n monitoring
+### 4. Default dashboards
 
-Get the URL from the grafana service and put in the browser
-UserName: admin 
-Password: prom-operator
+The chart preloads dashboards for: cluster overview, node usage, namespace usage, pod-level CPU/memory, kube-API-server, etcd, kubelet, scheduler, controller-manager, CoreDNS.
 
-Create Kubernetes Monitoring Dashboard
-Click '+' button on left panel and select ‘Import’.
-Enter 12740 dashboard id under Grafana.com Dashboard.
-Click ‘Load’.
-Select ‘Prometheus’ as the endpoint under prometheus data sources drop down.
-Click ‘Import’.
+---
 
-Create Kubernetes Cluster Monitoring Dashboard
-Click '+' button on left panel and select ‘Import’.
-Enter 3119 dashboard id under Grafana.com Dashboard.
-Click ‘Load’.
-Select ‘Prometheus’ as the endpoint under prometheus data sources drop down.
-Click ‘Import’
+## Tear down
 
-Create POD Monitoring Dashboard
-Click '+' button on left panel and select ‘Import’.
-Enter 6417 dashboard id under Grafana.com Dashboard.
-Click ‘Load’.
-Select ‘Prometheus’ as the endpoint under prometheus data sources drop down.
-Click ‘Import’.
+```bash
+helm uninstall monitoring -n monitoring
+kubectl delete namespace monitoring
+terraform destroy -auto-approve
+```
